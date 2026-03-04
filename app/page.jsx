@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   PieChart,
   Pie,
@@ -849,6 +849,11 @@ function BillingAndModelingSection({
               </div>
             </div>
 
+            {(modelingResult.summary.skippedCount ?? 0) > 0 && (
+              <p className="mb-3 text-sm text-amber-700 bg-amber-50 px-3 py-2 rounded">
+                {modelingResult.summary.skippedCount} row(s) skipped (no matching part number). Source cost not included in OCI comparison: {fmt(modelingResult.summary.skippedSourceCost)} {modelingResult.currencyCode}.
+              </p>
+            )}
             <div className="grid gap-3 sm:grid-cols-3 mb-4">
               <div className="rounded-lg bg-red-50 px-4 py-3">
                 <p className="text-xs text-red-600 font-medium uppercase tracking-wide">Current Cost</p>
@@ -908,28 +913,33 @@ function BillingAndModelingSection({
                     <th>Source Service</th>
                     <th>Category</th>
                     <th className="text-right">Source Cost</th>
-                    <th>OCI SKU</th>
+                    <th>Part Number</th>
                     <th className="text-right">Unit Price</th>
                     <th className="text-right">OCI Est. Cost</th>
                     <th className="text-right">Savings</th>
                     <th className="text-right">Save %</th>
+                    <th>Notes</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {modelingResult.rows?.map((row, idx) => (
-                    <tr key={idx} className={row.savingsPct > 0 ? '' : 'opacity-60'}>
-                      <td className="max-w-xs truncate">{row.sourceService}</td>
-                      <td>{row.serviceCategory}</td>
-                      <td className="text-right">{fmt(row.sourceCost)}</td>
-                      <td className="text-xs font-mono">{row.ociSkuPartNumber}</td>
-                      <td className="text-right text-xs">{row.ociUnitPrice}</td>
-                      <td className="text-right text-emerald-700 font-medium">{fmt(row.ociEstimatedCost)}</td>
-                      <td className="text-right text-primary-700">{fmt(row.savingsAmount)}</td>
-                      <td className={`text-right font-semibold ${row.savingsPct >= 0 ? 'text-primary-800' : 'text-red-600'}`}>
-                        {fmtPct(row.savingsPct)}
-                      </td>
-                    </tr>
-                  ))}
+                  {modelingResult.rows?.map((row, idx) => {
+                    const skipped = row.skipReason != null && row.skipReason !== '';
+                    return (
+                      <tr key={idx} className={skipped ? 'bg-slate-50' : row.savingsPct > 0 ? '' : 'opacity-60'}>
+                        <td className="max-w-xs truncate">{row.sourceService}</td>
+                        <td>{row.serviceCategory}</td>
+                        <td className="text-right">{fmt(row.sourceCost)}</td>
+                        <td className="text-xs font-mono">{row.ociSkuPartNumber || '—'}</td>
+                        <td className="text-right text-xs">{skipped ? '—' : row.ociUnitPrice}</td>
+                        <td className="text-right text-emerald-700 font-medium">{skipped ? '—' : fmt(row.ociEstimatedCost)}</td>
+                        <td className="text-right text-primary-700">{skipped ? '—' : fmt(row.savingsAmount)}</td>
+                        <td className={`text-right font-semibold ${skipped ? '' : row.savingsPct >= 0 ? 'text-primary-800' : 'text-red-600'}`}>
+                          {skipped ? '—' : fmtPct(row.savingsPct)}
+                        </td>
+                        <td className="text-sm text-amber-700 max-w-xs">{skipped ? row.skipReason : '—'}</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -1196,39 +1206,276 @@ function CalculatorSection({
   );
 }
 
-// ─── Quotations ───────────────────────────────────────────────────────────────
-function QuotationsSection({ quotations, loading, onRefresh, onLoad }) {
+// ─── OCI Mapping inline row components ────────────────────────────────────────
+function EditMappingRow({ id, partNumber, productTitle, onSave, onCancel }) {
+  const [sku, setSku] = useState(partNumber);
+  const [name, setName] = useState(productTitle);
   return (
-    <section className="card">
-      <div className="mb-4 flex items-center justify-between">
-        <h2 className="card-title mb-0">Saved Quotations</h2>
-        <button type="button" onClick={onRefresh} disabled={loading} className="btn-secondary">{loading ? 'Loading…' : 'Refresh'}</button>
-      </div>
-      {loading && <p className="text-sm text-slate-500">Loading…</p>}
-      {!loading && quotations.length === 0 && (
-        <p className="text-sm text-slate-500">No saved quotations. Calculate and use &quot;Save quotation&quot; on the Calculator tab.</p>
-      )}
-      {!loading && quotations.length > 0 && (
-        <div className="table-wrapper">
-          <table className="table-base">
-            <thead>
-              <tr><th>ID</th><th>Customer</th><th>Project</th><th>Currency</th><th>Created</th><th></th></tr>
-            </thead>
-            <tbody>
-              {quotations.map((q) => (
-                <tr key={q.quoteId}>
-                  <td className="font-medium">{q.quoteId}</td>
-                  <td>{q.customerName || '—'}</td>
-                  <td>{q.projectName || '—'}</td>
-                  <td>{q.currencyCode}</td>
-                  <td>{q.createdAt ? new Date(q.createdAt).toLocaleString() : '—'}</td>
-                  <td><button type="button" onClick={() => onLoad(q.quoteId)} className="btn-primary py-1.5 px-3 text-xs">Load</button></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+    <tr>
+      <td><input type="text" value={sku} onChange={(e) => setSku(e.target.value)} className="input-base w-full font-mono text-sm" placeholder="SKU" /></td>
+      <td><input type="text" value={name} onChange={(e) => setName(e.target.value)} className="input-base w-full" placeholder="Product Name" /></td>
+      <td className="flex items-center gap-1">
+        <button type="button" title="Save" onClick={() => onSave(id, sku.trim(), name.trim())} className="btn-primary p-1.5 rounded" aria-label="Save">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+        </button>
+        <button type="button" title="Cancel" onClick={onCancel} className="btn-secondary p-1.5 rounded" aria-label="Cancel">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+        </button>
+      </td>
+    </tr>
+  );
+}
+
+function AddMappingRow({ onSave, onCancel }) {
+  const [sku, setSku] = useState('');
+  const [name, setName] = useState('');
+  return (
+    <tr>
+      <td><input type="text" value={sku} onChange={(e) => setSku(e.target.value)} className="input-base w-full font-mono text-sm" placeholder="SKU" /></td>
+      <td><input type="text" value={name} onChange={(e) => setName(e.target.value)} className="input-base w-full" placeholder="Product Name" /></td>
+      <td className="flex items-center gap-1">
+        <button type="button" title="Save" onClick={() => onSave(sku.trim(), name.trim())} className="btn-primary p-1.5 rounded" aria-label="Save">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+        </button>
+        <button type="button" title="Cancel" onClick={onCancel} className="btn-secondary p-1.5 rounded" aria-label="Cancel">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+        </button>
+      </td>
+    </tr>
+  );
+}
+
+// ─── Quotations ───────────────────────────────────────────────────────────────
+function QuotationsSection({ quotations, loading, apiBaseUrl, onRefresh, onLoad }) {
+  const [ociSkuMappings, setOciSkuMappings] = useState([]);
+  const [ociSkuMappingsLoading, setOciSkuMappingsLoading] = useState(false);
+  const [ociSkuImportLoading, setOciSkuImportLoading] = useState(false);
+  const [ociSkuImportMessage, setOciSkuImportMessage] = useState(null);
+  const [editingId, setEditingId] = useState(null);
+  const [addFormVisible, setAddFormVisible] = useState(false);
+  const [actionMessage, setActionMessage] = useState(null);
+  const fileInputRef = useRef(null);
+
+  const fetchOciSkuMappings = useCallback(() => {
+    if (!apiBaseUrl) return;
+    setOciSkuMappingsLoading(true);
+    fetch(`${apiBaseUrl}/api/oci-sku-mappings`)
+      .then((r) => (r.ok ? r.json() : []))
+      .then((d) => setOciSkuMappings(Array.isArray(d) ? d : []))
+      .catch(() => setOciSkuMappings([]))
+      .finally(() => setOciSkuMappingsLoading(false));
+  }, [apiBaseUrl]);
+
+  useEffect(() => {
+    fetchOciSkuMappings();
+  }, [fetchOciSkuMappings]);
+
+  const onImportCsv = (e) => {
+    const file = e?.target?.files?.[0];
+    if (!file || !apiBaseUrl) return;
+    setOciSkuImportMessage(null);
+    setOciSkuImportLoading(true);
+    const formData = new FormData();
+    formData.append('file', file);
+    fetch(`${apiBaseUrl}/api/oci-sku-mappings/import`, {
+      method: 'POST',
+      body: formData,
+    })
+      .then((r) => {
+        if (!r.ok) return r.json().then((d) => Promise.reject(new Error(d.message || r.statusText)));
+        return r.json();
+      })
+      .then((data) => {
+        setOciSkuImportMessage(data?.message ?? `Imported ${data?.count ?? 0} mapping(s).`);
+        fetchOciSkuMappings();
+      })
+      .catch((err) => setOciSkuImportMessage(err?.message ?? 'Import failed'))
+      .finally(() => {
+        setOciSkuImportLoading(false);
+        e.target.value = '';
+      });
+  };
+
+  const onDeleteMapping = (m) => {
+    if (!m?.id || !apiBaseUrl) return;
+    if (!confirm('Delete this mapping?')) return;
+    setActionMessage(null);
+    fetch(`${apiBaseUrl}/api/oci-sku-mappings/${m.id}`, { method: 'DELETE' })
+      .then((r) => {
+        if (!r.ok) return r.json().then((d) => Promise.reject(new Error(d.message || r.statusText)));
+        fetchOciSkuMappings();
+        setActionMessage(null);
+      })
+      .catch((err) => setActionMessage(err?.message ?? 'Delete failed'));
+  };
+
+  const onSaveEdit = (id, partNumber, productTitle) => {
+    if (!id || !apiBaseUrl) return;
+    setActionMessage(null);
+    fetch(`${apiBaseUrl}/api/oci-sku-mappings/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ partNumber, productTitle }),
+    })
+      .then((r) => {
+        if (!r.ok) return r.json().then((d) => Promise.reject(new Error(d.message || r.statusText)));
+        return r.json();
+      })
+      .then(() => {
+        setEditingId(null);
+        fetchOciSkuMappings();
+        setActionMessage(null);
+      })
+      .catch((err) => setActionMessage(err?.message ?? 'Update failed'));
+  };
+
+  const onAddMapping = (partNumber, productTitle) => {
+    if (!apiBaseUrl) return;
+    setActionMessage(null);
+    fetch(`${apiBaseUrl}/api/oci-sku-mappings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ partNumber, productTitle }),
+    })
+      .then((r) => {
+        if (r.status === 409) return Promise.reject(new Error('A mapping with this product name already exists.'));
+        if (!r.ok) return r.json().then((d) => Promise.reject(new Error(d.message || r.statusText)));
+        return r.json();
+      })
+      .then(() => {
+        setAddFormVisible(false);
+        fetchOciSkuMappings();
+        setActionMessage(null);
+      })
+      .catch((err) => setActionMessage(err?.message ?? 'Add failed'));
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* OCI Mapping (Part Number + Product Name) */}
+      <section className="card">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
+          <h2 className="card-title mb-0">OCI Mapping</h2>
+          <div className="flex items-center gap-2">
+            <input
+              type="file"
+              accept=".csv"
+              className="hidden"
+              ref={fileInputRef}
+              onChange={onImportCsv}
+            />
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={ociSkuImportLoading}
+              className="btn-primary"
+            >
+              {ociSkuImportLoading ? 'Importing…' : 'Import CSV'}
+            </button>
+            <button
+              type="button"
+              onClick={() => { setAddFormVisible(true); setActionMessage(null); setEditingId(null); }}
+              className="btn-secondary"
+            >
+              Add mapping
+            </button>
+          </div>
         </div>
-      )}
-    </section>
+        <p className="text-sm text-slate-500 mb-3">
+          Import a CSV with columns <strong>SKU</strong> (or OCI SKU) and <strong>OCI Product Title</strong> (or OCI Product name). 
+        </p>
+        {ociSkuImportMessage && (
+          <p className={`text-sm mb-3 ${ociSkuImportMessage.startsWith('Imported') ? 'text-emerald-600' : 'text-red-600'}`}>
+            {ociSkuImportMessage}
+          </p>
+        )}
+        {actionMessage && (
+          <p className="text-sm mb-3 text-red-600">{actionMessage}</p>
+        )}
+        {ociSkuMappingsLoading && <p className="text-sm text-slate-500">Loading…</p>}
+        {!ociSkuMappingsLoading && ociSkuMappings.length === 0 && !addFormVisible && (
+          <p className="text-sm text-slate-500">No OCI mappings. Import a CSV with SKU and OCI Product Title to add mappings.</p>
+        )}
+        {(!ociSkuMappingsLoading && (ociSkuMappings.length > 0 || addFormVisible)) && (
+          <div className="table-wrapper">
+            <table className="table-base">
+              <thead>
+                <tr>
+                  <th>SKU</th>
+                  <th>Product Name</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {addFormVisible && (
+                  <AddMappingRow
+                    onSave={onAddMapping}
+                    onCancel={() => { setAddFormVisible(false); setActionMessage(null); }}
+                  />
+                )}
+                {ociSkuMappings.map((m) => (
+                  editingId === m.id ? (
+                    <EditMappingRow
+                      key={m.id}
+                      id={m.id}
+                      partNumber={m.partNumber ?? ''}
+                      productTitle={m.productTitle ?? ''}
+                      onSave={onSaveEdit}
+                      onCancel={() => { setEditingId(null); setActionMessage(null); }}
+                    />
+                  ) : (
+                    <tr key={m.id}>
+                      <td className="font-mono text-sm">{m.partNumber ?? '—'}</td>
+                      <td>{m.productTitle ?? '—'}</td>
+                      <td className="flex items-center gap-1">
+                        <button type="button" title="Edit" onClick={() => { setEditingId(m.id); setAddFormVisible(false); setActionMessage(null); }} className="btn-secondary p-1.5 rounded" aria-label="Edit">
+                          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/></svg>
+                        </button>
+                        <button type="button" title="Delete" onClick={() => onDeleteMapping(m)} className="btn-secondary p-1.5 rounded text-red-600 hover:text-red-700" aria-label="Delete">
+                          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>
+                        </button>
+                      </td>
+                    </tr>
+                  )
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      {/* Saved Quotations */}
+      <section className="card">
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="card-title mb-0">Saved Quotations</h2>
+          <button type="button" onClick={onRefresh} disabled={loading} className="btn-secondary">{loading ? 'Loading…' : 'Refresh'}</button>
+        </div>
+        {loading && <p className="text-sm text-slate-500">Loading…</p>}
+        {!loading && quotations.length === 0 && (
+          <p className="text-sm text-slate-500">No saved quotations. Calculate and use &quot;Save quotation&quot; on the Calculator tab.</p>
+        )}
+        {!loading && quotations.length > 0 && (
+          <div className="table-wrapper">
+            <table className="table-base">
+              <thead>
+                <tr><th>ID</th><th>Customer</th><th>Project</th><th>Currency</th><th>Created</th><th></th></tr>
+              </thead>
+              <tbody>
+                {quotations.map((q) => (
+                  <tr key={q.quoteId}>
+                    <td className="font-medium">{q.quoteId}</td>
+                    <td>{q.customerName || '—'}</td>
+                    <td>{q.projectName || '—'}</td>
+                    <td>{q.currencyCode}</td>
+                    <td>{q.createdAt ? new Date(q.createdAt).toLocaleString() : '—'}</td>
+                    <td><button type="button" onClick={() => onLoad(q.quoteId)} className="btn-primary py-1.5 px-3 text-xs">Load</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+    </div>
   );
 }
