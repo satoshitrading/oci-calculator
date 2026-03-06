@@ -594,14 +594,24 @@ function BillingAndModelingSection({
 }) {
   const [documentLoading, setDocumentLoading] = useState(false);
   const [documentError, setDocumentError] = useState(null);
+  const [documentProgress, setDocumentProgress] = useState(null);
   const [dragOver, setDragOver] = useState(false);
   const [modelingLoading, setModelingLoading] = useState(false);
   const [modelingError, setModelingError] = useState(null);
   const [activeSubTab, setActiveSubTab] = useState('upload');
+  const pollIntervalRef = useRef(null);
+
+  const stopPolling = () => {
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
+  };
 
   const uploadDocument = (file) => {
     if (!file) return;
     setDocumentError(null);
+    setDocumentProgress(null);
     setDocumentLoading(true);
     const formData = new FormData();
     formData.append('file', file);
@@ -615,13 +625,60 @@ function BillingAndModelingSection({
         return r.json();
       })
       .then((data) => {
-        setDocumentResult(data);
-        setModelingResult(null);
-        setActiveSubTab('extracted');
+        if (data.status === 'processing' && data.uploadId) {
+          setDocumentProgress({
+            progressPercent: data.progressPercent ?? 0,
+            totalPages: data.totalPages,
+            processedPages: data.processedPages,
+            fileName: data.fileName,
+          });
+          const poll = () => {
+            fetch(`${apiBaseUrl}/api/documents/${data.uploadId}`)
+              .then((r) => (r.ok ? r.json() : Promise.reject(new Error(r.statusText))))
+              .then((doc) => {
+                setDocumentProgress({
+                  progressPercent: doc.progressPercent ?? 0,
+                  totalPages: doc.totalPages,
+                  processedPages: doc.processedPages,
+                  fileName: doc.fileName,
+                });
+                if (doc.status === 'completed') {
+                  stopPolling();
+                  setDocumentResult(doc);
+                  setModelingResult(null);
+                  setDocumentProgress(null);
+                  setDocumentLoading(false);
+                  setActiveSubTab('extracted');
+                } else if (doc.status === 'failed') {
+                  stopPolling();
+                  setDocumentError(doc.errorMessage || 'Processing failed');
+                  setDocumentProgress(null);
+                  setDocumentLoading(false);
+                }
+              })
+              .catch((err) => {
+                stopPolling();
+                setDocumentError(err.message || 'Failed to check status');
+                setDocumentProgress(null);
+                setDocumentLoading(false);
+              });
+          };
+          poll();
+          pollIntervalRef.current = setInterval(poll, 1800);
+        } else {
+          setDocumentResult(data);
+          setModelingResult(null);
+          setDocumentLoading(false);
+          setActiveSubTab('extracted');
+        }
       })
-      .catch((err) => setDocumentError(err.message || 'Upload failed'))
-      .finally(() => setDocumentLoading(false));
+      .catch((err) => {
+        setDocumentError(err.message || 'Upload failed');
+        setDocumentLoading(false);
+      });
   };
+
+  useEffect(() => () => stopPolling(), []);
 
   const runModeling = async () => {
     if (!documentResult?.uploadId) return;
@@ -721,6 +778,26 @@ function BillingAndModelingSection({
               <p className="mt-1 text-xs text-slate-400">PDF · CSV · XLSX — up to 50 MB</p>
             </label>
           </div>
+          {documentLoading && documentProgress != null && (
+            <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <span className="text-sm font-medium text-slate-700">
+                  {documentProgress.fileName ? `Processing ${documentProgress.fileName}` : 'Processing…'}
+                </span>
+                <span className="text-sm text-slate-500">
+                  {documentProgress.totalPages != null && documentProgress.processedPages != null
+                    ? `Page ${documentProgress.processedPages} of ${documentProgress.totalPages}`
+                    : `${documentProgress.progressPercent ?? 0}%`}
+                </span>
+              </div>
+              <div className="h-2 w-full rounded-full bg-slate-200 overflow-hidden">
+                <div
+                  className="h-full bg-primary-500 transition-all duration-300"
+                  style={{ width: `${Math.min(100, documentProgress.progressPercent ?? 0)}%` }}
+                />
+              </div>
+            </div>
+          )}
           {documentError && <p className="mb-2 text-sm text-red-600 rounded-lg bg-red-50 px-4 py-2">{documentError}</p>}
           {documentResult && (
             <div className="rounded-lg bg-green-50 px-4 py-3 text-sm text-green-800">
