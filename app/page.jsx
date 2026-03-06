@@ -664,7 +664,7 @@ function BillingAndModelingSection({
               });
           };
           poll();
-          pollIntervalRef.current = setInterval(poll, 1800);
+          pollIntervalRef.current = setInterval(poll, 10000);
         } else {
           setDocumentResult(data);
           setModelingResult(null);
