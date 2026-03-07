@@ -626,6 +626,7 @@ function BillingAndModelingSection({
       })
       .then((data) => {
         if (data.status === 'processing' && data.uploadId) {
+          const pollUrl = `${apiBaseUrl}/api/documents/${data.uploadId}`;
           setDocumentProgress({
             progressPercent: data.progressPercent ?? 0,
             totalPages: data.totalPages,
@@ -633,7 +634,7 @@ function BillingAndModelingSection({
             fileName: data.fileName,
           });
           const poll = () => {
-            fetch(`${apiBaseUrl}/api/documents/${data.uploadId}`)
+            fetch(pollUrl)
               .then((r) => (r.ok ? r.json() : Promise.reject(new Error(r.statusText))))
               .then((doc) => {
                 setDocumentProgress({
@@ -658,7 +659,12 @@ function BillingAndModelingSection({
               })
               .catch((err) => {
                 stopPolling();
-                setDocumentError(err.message || 'Failed to check status');
+                const msg = err?.message ?? '';
+                const isConnectionRefused = typeof msg === 'string' && (msg.includes('Failed to fetch') || msg.includes('Load failed') || msg.includes('NetworkError') || msg.includes('connection refused') || msg.includes('ERR_CONNECTION_REFUSED'));
+                const friendlyMessage = isConnectionRefused
+                  ? `Cannot reach the backend at ${apiBaseUrl}.`
+                  : (msg || 'Failed to check status');
+                setDocumentError(friendlyMessage);
                 setDocumentProgress(null);
                 setDocumentLoading(false);
               });
@@ -673,7 +679,12 @@ function BillingAndModelingSection({
         }
       })
       .catch((err) => {
-        setDocumentError(err.message || 'Upload failed');
+        const msg = err?.message ?? '';
+        const isConnectionRefused = typeof msg === 'string' && (msg.includes('Failed to fetch') || msg.includes('Load failed') || msg.includes('NetworkError') || msg.includes('connection refused') || msg.includes('ERR_CONNECTION_REFUSED'));
+        const friendlyMessage = isConnectionRefused
+          ? `Cannot reach the backend at ${apiBaseUrl}.`
+          : (msg || 'Upload failed');
+        setDocumentError(friendlyMessage);
         setDocumentLoading(false);
       });
   };
