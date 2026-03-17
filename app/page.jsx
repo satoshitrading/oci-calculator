@@ -599,7 +599,23 @@ function BillingAndModelingSection({
   const [modelingLoading, setModelingLoading] = useState(false);
   const [modelingError, setModelingError] = useState(null);
   const [activeSubTab, setActiveSubTab] = useState('upload');
+  const [lineItemOciSku, setLineItemOciSku] = useState({});
+  const [lineItemSavingId, setLineItemSavingId] = useState(null);
+  const [editingLineItemId, setEditingLineItemId] = useState(null);
   const pollIntervalRef = useRef(null);
+
+  useEffect(() => {
+    if (documentResult?.lineItems) {
+      setLineItemOciSku((prev) => {
+        const next = { ...prev };
+        documentResult.lineItems.forEach((i) => {
+          const id = i.id ?? i._id;
+          if (id) next[id] = i.ociSkuPartNumber ?? i.ociSkuName ?? '';
+        });
+        return next;
+      });
+    }
+  }, [documentResult?.uploadId, documentResult?.lineItems]);
 
   const stopPolling = () => {
     if (pollIntervalRef.current) {
@@ -662,7 +678,7 @@ function BillingAndModelingSection({
                 const msg = err?.message ?? '';
                 const isConnectionRefused = typeof msg === 'string' && (msg.includes('Failed to fetch') || msg.includes('Load failed') || msg.includes('NetworkError') || msg.includes('connection refused') || msg.includes('ERR_CONNECTION_REFUSED'));
                 const friendlyMessage = isConnectionRefused
-                  ? `Cannot reach the backend at ${apiBaseUrl}.`
+                  ? `Cannot reach the backend at ${apiBaseUrl}. Start the backend server (e.g. on port 4000), or set NEXT_PUBLIC_API_URL to your backend URL and rebuild.`
                   : (msg || 'Failed to check status');
                 setDocumentError(friendlyMessage);
                 setDocumentProgress(null);
@@ -691,6 +707,35 @@ function BillingAndModelingSection({
 
   useEffect(() => () => stopPolling(), []);
 
+  const refetchDocument = useCallback(async () => {
+    if (!documentResult?.uploadId) return;
+    try {
+      const doc = await apiFetch(`/api/documents/${documentResult.uploadId}`);
+      setDocumentResult(doc);
+    } catch (_) {}
+  }, [documentResult?.uploadId, setDocumentResult]);
+
+  const saveLineItemOciSku = async (lineItemId, ociSkuPartNumber, ociSkuName) => {
+    if (!documentResult?.uploadId) return;
+    setLineItemSavingId(lineItemId);
+    try {
+      const res = await fetch(`${apiBaseUrl}/api/documents/${documentResult.uploadId}/line-items/${lineItemId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ociSkuPartNumber: ociSkuPartNumber || null,
+          ociSkuName: ociSkuName || null,
+        }),
+      });
+      if (!res.ok) throw new Error(res.statusText);
+      await refetchDocument();
+    } catch (e) {
+      setModelingError(e?.message ?? 'Failed to save OCI SKU');
+    } finally {
+      setLineItemSavingId(null);
+    }
+  };
+
   const runModeling = async () => {
     if (!documentResult?.uploadId) return;
     setModelingLoading(true);
@@ -702,6 +747,7 @@ function BillingAndModelingSection({
         body: JSON.stringify({
           uploadId: documentResult.uploadId,
           currencyCode: documentResult.costSummary?.currencyCode ?? 'USD',
+          lineItems: documentResult.lineItems ?? undefined,
         }),
       });
       setModelingResult(result);
@@ -900,20 +946,109 @@ function BillingAndModelingSection({
                     <th>Region</th>
                     <th className="text-right">Cost</th>
                     <th>Currency</th>
+                    <th>OCI SKU</th>
+                    <th className="text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {documentResult.lineItems?.map((item, idx) => (
-                    <tr key={idx}>
-                      <td className="max-w-xs truncate">{item.productName ?? item.productCode ?? '—'}</td>
-                      <td>{item.serviceCategory ?? '—'}</td>
-                      <td>{item.usageQuantity ?? '—'}</td>
-                      <td>{item.unitOfMeasure ?? '—'}</td>
-                      <td>{item.regionName ?? '—'}</td>
-                      <td className="text-right font-medium">{item.costBeforeTax != null ? fmt(item.costBeforeTax) : '—'}</td>
-                      <td>{item.currencyCode ?? 'USD'}</td>
-                    </tr>
-                  ))}
+                  {documentResult.lineItems?.map((item, idx) => {
+                    const lineItemId = item.id ?? item._id;
+                    const displayOciSku = lineItemOciSku[lineItemId] ?? item.ociSkuPartNumber ?? item.ociSkuName ?? '';
+                    const isSaving = lineItemSavingId === lineItemId;
+                    const isEditing = editingLineItemId === lineItemId;
+                    return (
+                      <tr key={lineItemId ?? idx}>
+                        <td className="max-w-xs truncate">{item.productName ?? item.productCode ?? '—'}</td>
+                        <td>{item.serviceCategory ?? '—'}</td>
+                        <td>{item.usageQuantity ?? '—'}</td>
+                        <td>{item.unitOfMeasure ?? '—'}</td>
+                        <td>{item.regionName ?? '—'}</td>
+                        <td className="text-right font-medium">{item.costBeforeTax != null ? fmt(item.costBeforeTax) : '—'}</td>
+                        <td>{item.currencyCode ?? 'USD'}</td>
+                        <td>
+                          {lineItemId ? (
+                            <input
+                              type="text"
+                              className={`w-full min-w-[8rem] rounded border px-2 py-1 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 ${isEditing ? 'border-primary-400 bg-white' : 'border-slate-200 bg-slate-50 text-slate-600'}`}
+                              value={displayOciSku}
+                              onChange={(e) => setLineItemOciSku((prev) => ({ ...prev, [lineItemId]: e.target.value }))}
+                              readOnly={!isEditing}
+                              placeholder="Part number or name"
+                            />
+                          ) : (
+                            <span>{item.ociSkuPartNumber ?? item.ociSkuName ?? '—'}</span>
+                          )}
+                        </td>
+                        <td className="text-right">
+                          {lineItemId && (
+                            isEditing ? (
+                              <button
+                                type="button"
+                                disabled={isSaving}
+                                title="Save"
+                                className="inline-flex items-center justify-center rounded-full bg-primary-600 px-2.5 py-1.5 text-white shadow-sm hover:bg-primary-700 disabled:opacity-50"
+                                onClick={() => {
+                                  const value = (lineItemOciSku[lineItemId] ?? displayOciSku).trim();
+                                  saveLineItemOciSku(lineItemId, value || null, value || null);
+                                  setEditingLineItemId(null);
+                                }}
+                                aria-label="Save OCI SKU"
+                              >
+                                {isSaving ? (
+                                  <span className="text-xs font-medium">Saving…</span>
+                                ) : (
+                                  <svg
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    width="16"
+                                    height="16"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    strokeWidth="2"
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                  >
+                                    <polyline points="20 6 9 17 4 12" />
+                                  </svg>
+                                )}
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                title="Edit"
+                                className="inline-flex items-center justify-center rounded-full border border-slate-300 bg-white px-2.5 py-1.5 text-slate-600 shadow-sm hover:bg-slate-50"
+                                onClick={() => {
+                                  if (!lineItemOciSku[lineItemId]) {
+                                    setLineItemOciSku((prev) => ({
+                                      ...prev,
+                                      [lineItemId]: displayOciSku,
+                                    }));
+                                  }
+                                  setEditingLineItemId(lineItemId);
+                                }}
+                                aria-label="Edit OCI SKU"
+                              >
+                                <svg
+                                  xmlns="http://www.w3.org/2000/svg"
+                                  width="16"
+                                  height="16"
+                                  viewBox="0 0 24 24"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  strokeWidth="2"
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                >
+                                  <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+                                  <path d="m15 5 4 4" />
+                                </svg>
+                              </button>
+                            )
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
