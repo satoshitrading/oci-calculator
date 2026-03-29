@@ -747,7 +747,6 @@ function BillingAndModelingSection({
         body: JSON.stringify({
           uploadId: documentResult.uploadId,
           currencyCode: documentResult.costSummary?.currencyCode ?? 'USD',
-          lineItems: documentResult.lineItems ?? undefined,
         }),
       });
       setModelingResult(result);
